@@ -1,0 +1,400 @@
+---
+title: "MCIBLab1. Introducción a MCIB. Parte 2"
+author: "David Ríos Insua"
+date: " "
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introducción
+
+Segunda parte de la intro. En este lab hacemos una visita por estos modelos:  regresión lineal, regresión logística,
+modelos dinámicos lineales. Los modelos se han visto en clase pero
+haremos un recordatorio. 
+
+
+## Regresión lineal
+Este ejemplo está adaptado del libro de Albert (Bayesian 
+computation with R) y emplea el paquete LearnBayes y el conjunto de datos bidextinct. 
+Para cada especie de pájaro se toman las variables TIME, tiempo medio de extinción; NESTING, número medio de pares que anidan; SIZE, tamaño de la especie (large o small); STATUS, status migratorio de la especie (migratorio o residente). Se desea ajustar un modelo que describa la variación en el tiempo hasta extinción de la especie en función de NESTING, SIZE y STATUS.  Cargamos el paquete LearnBayes, leemos el fichero y hacemos alguna exploración gráfica inicial. Hacemos la transformación log sobre la variable de interés TIME por
+ser muy asimétrica hacia la derecha. Cruzamos log(time) con las otras variables.
+Dos de ellas son discretas por lo que se perturban
+```{r,eval=FALSE,echo=TRUE }
+install.packages("LearnBayes")
+library(LearnBayes)
+data("birdextinct")
+attach(birdextinct) 
+head(birdextinct)
+hist(time)
+logtime=log(time) 
+plot(nesting,logtime)  
+out = (logtime > 3) 
+text(nesting[out], logtime[out], label=species[out], pos = 2) 
+plot(size,logtime)
+plot(jitter(size),logtime,xaxp=c(0,1,1)) #los mareamos para que se vean claros
+plot(jitter(status),logtime,xaxp=c(0,1,1)) #(0,1 con separación 1)
+```
+El modelo que se formula es   E(log TIMEi|x, θ) = β0 + β1 NESTINGi + β2 SIZEi + β3 STATUSi.  Dos de las variables explicativas son categóricas con dos niveles y se representan como indicadores binarios. SIZE se codifica  0 (1) para pequeño (grande) y STATUS 0 (1) para migrante (residente). Hacemos primero el ajuste por mínimos cuadrados con el comando lm e interpretamos los resultados. Si no recuerdas lm, haz antes un help(lm).
+```{r,eval=FALSE,echo=TRUE }
+fit=lm(logtime~nesting+size+status,data=birdextinct,x=TRUE,y=TRUE)
+summary(fit) #el más significativo es nesting pues es el más cercano a 0, size y status también pero a menor nivel.
+```
+Usamos ahora la función blinreg para muestrear de la a posteriori de ( β, σ), con una a priori no informativa. Sus entradas son el vector de respuestas, la matriz de diseño X y el tamaño muestral de la simulación.  Después mostramos los histogramas de los cuatro parámetros. Finalmente, resumimos las distribuciones mediantes los percentiles 5, 50, 95  de los datos simulados y comentamos.
+```{r,eval=FALSE,echo=TRUE }
+theta.sample=blinreg(fit$y,fit$x,5000)  
+par(mfrow=c(2,2)) 
+hist(theta.sample$beta[,2],main="NESTING",   xlab=expression(beta[1]))
+hist(theta.sample$beta[,3],main="SIZE",  xlab=expression(beta[2])) 
+hist(theta.sample$beta[,4],main="STATUS",   xlab=expression(beta[3])) 
+hist(theta.sample$sigma,main="ERROR SD",  xlab=expression(sigma))  
+apply(theta.sample$beta,2,quantile,c(.05,.5,.95)) 
+quantile(theta.sample$sigma,c(.05,.5,.95))
+```
+Ahora empleamos la función blingrexpected para dar la respuesta esperada con cuatro casos nuevos referidos a combinaciones de SIZE y STATUS.
+```{r,eval=FALSE,echo=TRUE }
+cov1=c(1,4,0,0)
+cov2=c(1,4,1,0)  
+cov3=c(1,4,0,1)  
+cov4=c(1,4,1,1)  
+X1=rbind(cov1,cov2,cov3,cov4)  
+mean.draws=blinregexpected(X1,theta.sample) 
+c.labels=c("A","B","C","D")  
+par(mfrow=c(2,2)) 
+for (j in 1:4)  
+   hist(mean.draws[,j],  main=paste("Covariate set",c.labels[j]),xlab="log TIME")
+```
+Ahora usamos blinregpred para hacer predicciones con los mismos casos anteriores. Comentamos los resultados comparando con el anterior
+```{r,eval=FALSE,echo=TRUE }
+X1=rbind(cov1,cov2,cov3,cov4) 
+pred.draws=blinregpred(X1,theta.sample)  
+c.labels=c("A","B","C","D")  
+par(mfrow=c(2,2)) 
+for (j in 1:4)   
+      hist(pred.draws[,j],  main=paste("Covariate set",c.labels[j]),xlab="log TIME") 
+```
+Vemos ahora dos métodos para evaluar (el ajuste d)el modelo. Una primera posibilidad es ver si las predicciones que hacemos cubren las observaciones. Lo hacemos con intervalos de probabilidad predictiva 0.9.  Los puntos que quedan fuera son posibles outliers. En el ejemplo vemos 3 (snipe, raven, and skylark).
+```{r,eval=FALSE,echo=TRUE }
+pred.draws=blinregpred(fit$x,theta.sample)
+pred.sum=apply(pred.draws,2,quantile,c(.05,.95))
+par(mfrow=c(1,1)) 
+ind=1:length(logtime)  
+matplot(rbind(ind,ind),pred.sum,type="l",lty=1,col=1,xlab="INDEX",ylab="log TIME") 
+points(ind,logtime,pch=19) 
+out=(logtime>pred.sum[2,])  
+text(ind[out], logtime[out], label=species[out], pos = 4) 
+```
+El siguiente método usa los residuos bayesianos, que se calculan con la función bayesresiduals. Observa cuales son sus inputs (el ultimo es un valor de corte igual a 2). ECon el comando identify se identifican casos con probabilidades de outlier mayor que 0.4: corresponden a casos cuyos tiempos no quedan bien explicados por NESTING, SIZE y STATUS.
+```{r,eval=FALSE,echo=TRUE }
+prob.out=bayesresiduals(fit,theta.sample,2) 
+ par(mfrow=c(1,1)) 
+plot(nesting,prob.out) 
+out = (prob.out > 0.35) 
+text(nesting[out], prob.out[out], label=species[out], pos = 4) 
+```
+Piensa en cómo están diseñadas las rutinas, recordando la discusión en la clase de pizarra.
+
+
+## Regresión logística (en dimensión baja!!!)
+
+Aquí ilustramos el uso de inferencia bayesiana en un modelo de regresión logística de baja dimensión. Adaptamos el código de Vehtari y Paasiniemi de su curso basado en el libro BDA que se ha visto en las traspas del curso.
+
+Primero cargamos algunos paquetes: ggplot2 y gridExtra que emplearemos para gráficos y  tidyr para manipular data frames 
+```{r,eval=FALSE,echo=TRUE }
+install.packages("ggplot2")
+library(ggplot2)
+theme_set(theme_minimal())
+library(gridExtra)
+install.packages("tidyr")
+library(tidyr)
+library(dplyr)
+library(purrr)
+```
+Aquí cargamos los datos del bioensayo. X son dosis, n número de ensayos a esa dosis, y número de muertos. Después los representamos.
+```{r,eval=FALSE,echo=TRUE }
+df1 <- data.frame(
+  x = c(-0.86, -0.30, -0.05, 0.73),
+  n = c(5, 5, 5, 5),
+  y = c(0, 1, 3, 5)
+)
+df1
+ggplot(df1, aes(x=x, y=y)) +
+    geom_point(size=2, color='red') +
+    scale_x_continuous(breaks = df1$x, minor_breaks=NULL, limits = c(-1.5, 1.5)) +
+    scale_y_continuous(breaks = 0:5, minor_breaks=NULL) +
+    labs(title = 'Bioassay', x = 'Dose (log g/ml)', y = 'Number of deaths') +
+    theme(panel.grid.major = element_blank())
+```
+Ahora vamos a estimar la densidad a posteriori en una parrilla. Suponemos que la a priori es plana. Buscamos una región donde es relevante la a posteriori, por ejemplo, teniendo en cuenta información que nos dé el modelo clásico de regresión logística.
+
+A partir de ahí definimos la parrilla en [-4,8]X[-10,40]. 
+```{r,eval=FALSE,echo=TRUE }
+A = seq(-4, 8, length.out = 50)
+B = seq(-10, 40, length.out = 50)
+cA <- rep(A, each = length(B))
+cB <- rep(B, length(A))
+```
+Ponemos una función auxiliar que ayuda a calcular la log-verosimilitud con data frame x,y,n en los  puntos a,b de la parrila. log1p(x) calcula log(x+1) de forma más estable 
+```{r,eval=FALSE,echo=TRUE }
+logl <- function(df, a, b)
+  df['y']*(a + b*df['x']) - df['n']*log1p(exp(a + b*df['x']))
+```
+Calculamos ahora las verosimilitudes aplicando la función para cada observación (x,n,y), luego sumamos las log-verosimilitudes y exponenciamos
+```{r,eval=FALSE,echo=TRUE }
+p <- apply(df1, 1, logl, cA, cB) %>%
+rowSums() %>% exp()
+```
+Muestreamos 1000 obsevraciones de la parrilla (con reemplazamiento) y luego añadimos un poco de jitter para la representación (por ser con reemplazamiento se pueden repetir). Con ellas creamos un data frame
+```{r,eval=FALSE,echo=TRUE }
+nsamp <- 1000
+samp_indices <- sample(length(p), size = nsamp,replace = T, prob = p/sum(p))
+samp_A <- cA[samp_indices[1:nsamp]]
+samp_B <- cB[samp_indices[1:nsamp]]
+samp_A <- samp_A + runif(nsamp, (A[1] - A[2])/2, (A[2] - A[1])/2)
+samp_B <- samp_B + runif(nsamp, (B[1] - B[2])/2, (B[2] - B[1])/2)
+samps <- data_frame(ind = 1:nsamp, alpha = samp_A, beta = samp_B) %>%
+  mutate(ld50 = - alpha/beta)
+```
+Dibujamos ahora las correspondientes curvas logísticas. 
+```{r,eval=FALSE,echo=TRUE }
+invlogit <- plogis
+xr <- seq(-1.5, 1.5, length.out = 100)
+dff <- pmap_df(samps[1:100,], ~ data_frame(x = xr, id=..1,
+                                   f = invlogit(..2 + ..3*x)))
+ppost <- ggplot(df1, aes(x=x, y=y/n)) +
+  geom_line(data=dff, aes(x=x, y=f, group=id), linetype=1, color='blue', alpha=0.2) +
+  geom_point(size=2, color='red') +
+  scale_x_continuous(breaks = df1$x, minor_breaks=NULL, limits = c(-1.5, 1.5)) +
+  scale_y_continuous(breaks = seq(0,1,length.out=3), minor_breaks=NULL) +
+  labs(title = 'Bioassay', x = 'Dose (log g/ml)', y = 'Proportion of deaths') +
+  theme(panel.grid.major = element_blank())
+```
+Añadimos líneas de muerte de 50% y puntos LD50
+```{r,eval=FALSE,echo=TRUE }
+ppost + geom_hline(yintercept = 0.5, linetype = 'dashed', color = 'gray') +
+  geom_point(data=samps[1:100,], aes(x=ld50, y=0.5), color='blue', alpha=0.2)
+```
+Hacemos un dibujo de la densidad a posteriori y luego de las muestras y los combinamos
+```{r,eval=FALSE,echo=TRUE }
+# limits for the plots
+xl <- c(-2, 8)
+yl <- c(-2, 40)
+pos <- ggplot(data = data.frame(cA ,cB, p), aes(cA, cB)) +
+  geom_raster(aes(fill = p, alpha = p), interpolate = T) +
+  geom_contour(aes(z = p), colour = 'black', size = 0.2) +
+  coord_cartesian(xlim = xl, ylim = yl) +
+  labs(title = 'Posterior density evaluated in grid', x = 'alpha', y = 'beta') +
+  scale_fill_gradient(low = 'yellow', high = 'red', guide = F) +
+  scale_alpha(range = c(0, 1), guide = F)
+# muestras 
+sam <- ggplot(data = samps) +
+  geom_point(aes(alpha, beta), color = 'blue') +
+  coord_cartesian(xlim = xl, ylim = yl) +
+  labs(title = 'Posterior draws', x = 'alpha', y = 'beta')
+# combinamos 
+grid.arrange(pos, sam, nrow=2)
+```
+Dibujamos ahora el histograma del LD50
+```{r,eval=FALSE,echo=TRUE }
+his <- ggplot(data = samps) +
+  geom_histogram(aes(ld50), binwidth = 0.02,
+                 fill = 'steelblue', color = 'black') +
+  coord_cartesian(xlim = c(-0.5, 0.5)) +
+  labs(x = 'LD50 = -alpha/beta')
+ his
+```
+
+## Modelos dinámicos lineales
+
+En esta parte usaremos el paquete dlm de R. Si no lo tienes instalado, abre tu R e instálalo. Te pedirá un repositorio del que bajarlo (p.ej., Spain (Madrid)). Una vez instalado lo cargas pf.
+```{r,eval=FALSE,echo=TRUE }
+install.packages("dlm")
+library(dlm)
+```
+Compureba tu instalación con 
+```{r,eval=FALSE,echo=TRUE }
+search()
+library()
+data()
+```
+En esta primera parte no usamos dlm. Simulamos en R  observaciones del modelo de nivel loca. Vemos el efecto de las varianzas V y W. Intentalo hacer más eficiente sin los bucles!!!
+```{r,eval=FALSE,echo=TRUE }
+x0<-100
+yy<-matrix(0,1,30)
+mu<-matrix(0,1,30)
+mu[1]<-x0+rnorm(1,0,1) #una obse de la normal de media 0 y desv 1
+yy[1]<-mu[1]+rnorm(1,0,1)
+    for (i in 2:30)
+    {mu[i]<-mu[i-1]+rnorm(1,0,1);
+      yy[i]<-mu[i]+rnorm(1,0,1)}
+      par(mfrow=c(2,2))
+    plot(mu[1,])   
+    plot(yy[1,])
+```
+Ahora aumentamos la relación entre V y W
+```{r,eval=FALSE,echo=TRUE }
+   x0<-100
+mu[1]<-x0+rnorm(1,0,1)
+yy[1]<-mu[1]+rnorm(1,0,2)
+    for (i in 2:30)
+    {mu[i]<-mu[i-1]+rnorm(1,0,1);
+      yy[i]<-mu[i]+rnorm(1,0,2)}
+       plot(mu[1,])   
+    plot(yy[1,])
+```
+Realizamos el mismo ejercicio con un modelo de crecimiento lineal
+```{r,eval=FALSE,echo=TRUE }
+x0<-100
+yy<-matrix(0,1,30)
+mu<-matrix(0,1,30)
+beta<-matrix(0,1,30)
+mu[1]<-x0+rnorm(1,0,1)
+yy[1]<-mu[1]+rnorm(1,0,1)
+beta[1]<-1
+    for (i in 2:30)
+    {beta[i]<-beta[i-1]+rnorm(1,0,1);
+      mu[i]<-mu[i-1]+beta[i-1]+rnorm(1,0,1);
+      yy[i]<-mu[i]+rnorm(1,0,1)}
+    plot(yy[1,])
+```
+Pasamos ya a emplear dlm (se supone que lo hemos cargado). Definimos un primer DLM y estudiamos sus características
+```{r,eval=FALSE,echo=TRUE }
+rw <- dlm(m0 = 0, C0 = 10, FF = 1, V = 1.4, GG = 1, W = 0.2)
+unlist(rw)
+```
+Algunos modelos habituales se definen con funciones especiales. Como en los dos ejemplos siguientes
+```{r,eval=FALSE,echo=TRUE }
+rw <- dlmModPoly(order=1, C0 = 10, dV = 1.4, dW = 0.2)
+rw
+lg <- dlm(FF = matrix(c(1, 0), nr = 1),
+          V = 1.4,
+          GG = matrix(c(1, 0, 1, 1), nr = 2),
+          W = diag(c(0, 0.2)),
+          m0 = rep(0, 2),
+          C0 = 10 * diag(2))
+lg
+is.dlm(lg)
+```
+Cambiamos ahora la varianza de observación a 0.8 y la de sistema a 0.5
+```{r,eval=FALSE,echo=TRUE }
+V(lg) <- 0.8
+W(lg)[2, 2] <- 0.5
+V(lg)
+W(lg)
+lg
+```
+Definimos ahora un modelo con F’s y G’s cambiantes (regresión dinámica) 
+```{r,eval=FALSE,echo=TRUE }
+x <- rnorm(100) # covariates
+dlr <- dlm(FF = matrix(c(1, 0), nr = 1),
+           V = 1.3,
+           GG = diag(2),
+           W = diag(c(0.4, 0.2)),
+           m0 = rep(0, 2), C0 = 10 * diag(2),
+           JFF = matrix(c(0, 1), nr = 1),
+           X = x)
+dlr
+```
+Hacemos filtrado con los datos del Nilo. Comprueba que los tienes. Visualízalos. Exploralos
+```{r,eval=FALSE,echo=TRUE }
+data()
+Nile
+plot(Nile)
+acf(Nile)
+```
+Construimos, ajustamos y presentamos el modelo 
+```{r,eval=FALSE,echo=TRUE }
+NilePoly <- dlmModPoly(order = 1, dV = 15100, dW = 1468)
+unlist(NilePoly)
+```
+Filtramos con la función dlmFilter
+```{r,eval=FALSE,echo=TRUE }
+NileFilt <- dlmFilter(Nile, NilePoly)
+str(NileFilt, 1)
+NileFilt
+NileFilt$a
+NileFilt$m
+NileFIlt$f
+n <- length(Nile)
+attach(NileFilt)
+search()
+dlmSvd2var(U.C[[n + 1]], D.C[n + 1, ])
+```
+Ahora usamos dos modelos para ver el impacto de la ratio w/v
+```{r,eval=FALSE,echo=TRUE }
+plot(Nile)
+plot(Nile, type='o', col = c("darkgrey"),
+     xlab = "", ylab = "Level")
+```   
+Primer modelo
+```{r,eval=FALSE,echo=TRUE }
+mod1 <- dlmModPoly(order = 1, dV = 15100, dW = 755)
+NileFilt1 <- dlmFilter(Nile, mod1)
+lines(dropFirst(NileFilt1$m), lty = "longdash")
+```
+Segundo modelo
+```{r,eval=FALSE,echo=TRUE }
+mod2 <- dlmModPoly(order = 1, dV = 15100, dW = 7550)
+NileFilt2 <- dlmFilter(Nile, mod2)
+lines(dropFirst(NileFilt2$m), lty = "dotdash")
+leg <- c("data", paste("filtered,  W/V =",
+                       format(c(W(mod1) / V(mod1),
+                                W(mod2) / V(mod2)))))
+legend("bottomright", legend = leg,
+       col=c("darkgrey", "black", "black"),
+       lty = c("solid", "longdash", "dotdash"),
+       pch = c(1, NA, NA), bty = "n")
+``` 
+Mostramos predicciones con los datos del Nilo con ambos modelos. Preparamos datos, predicciones, hacemos figuras y añadimos leyendas
+```{r,eval=FALSE,echo=TRUE }
+a <- window(cbind(Nile, NileFilt1$f, NileFilt2$f),
+            start = 1880, end = 1920)
+a
+plot(a[, 1], type = 'o', col = "darkgrey",
+     xlab = "", ylab = "Level")
+lines(a[, 2], lty = "longdash")
+lines(a[, 3], lty = "dotdash")
+leg <- c("data", paste("one-step-ahead forecast,  W/V =",
+                       format(c(W(mod1) / V(mod1),
+                                W(mod2) / V(mod2)))))
+legend("bottomleft", legend = leg,
+       col = c("darkgrey", "black", "black"),
+       lty = c("solid", "longdash", "dotdash"),
+       pch = c(1, NA, NA), bty = "n")
+```
+Mostramos predicciones a 5 años con el modelo Nilefilt1. Hacemos predicciones incluyendo 3 trayectorias
+```{r,eval=FALSE,echo=TRUE }
+set.seed(1)
+NileFore <- dlmForecast(NileFilt1, nAhead = 5, sampleNew = 3)
+NileFore
+```
+Dibujamos primero la series. Luego las predicciones y leyendas
+```{r,eval=FALSE,echo=TRUE }
+plot(window(Nile, start = c(1871, 1)), type = 'o',
+     xlim = c(1871, 1976), ylim = c(500,1400),
+     xlab = "", ylab = "Nile flows")
+names(NileFore)
+attach(NileFore)
+invisible(lapply(newObs, function(x)
+                 lines(x, col = "darkgrey",
+                       type = 'o', pch = 4)))
+lines(f, type = 'o', lwd = 2, pch = 16)
+abline(v = mean(c(time(f)[1], time(Nile)[length(Nile)])),
+       lty = "dashed")
+detach()
+```
+Validamos el dlm NileFilt1. Extraemos residuos. Evaluamos residuos
+```{r,eval=FALSE,echo=TRUE }
+mod1 <- dlmModPoly(order = 1, dV = 15100, dW = 755)
+NileFilt1 <- dlmFilter(Nile, mod1)
+Nileresid1<-residuals(NileFilt1,sd=FALSE)
+Nileresid1
+qqnorm(Nileresid1)
+qqline(Nileresid1)
+acf(Nileresid1)
+tsdiag(NileFilt1)
+```
+
+
